@@ -1,0 +1,130 @@
+---
+title: "BES analysis"
+author: "Lili Benitez"
+date: "2026-07-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(lme4)
+library(lmerTest)
+library(tidyr)
+Canopy<- BES_Data_Sheet_Entered_data_CanopyCover
+Veg<-BES_Data_Sheet_Entered_data_Veg
+Air<-BES_Data_Sheet_Entered_AirQ
+Canopy$`Canopy open %`<-as.numeric(Canopy$`Canopy open %`)
+Canopy$`Round`<-as.character(Canopy$Round)
+Canopy$`Site`<-as.character(Canopy$Site)
+Canopy<-rename(Canopy, Canopy_open='Canopy open %')
+Canopy_av<-Canopy%>%
+  select(Round,Site, Corner,Canopy_open)%>%
+  group_by(Round, Site)%>%
+  mutate(Open_av=mean(as.numeric(Canopy_open), na.rm=TRUE))%>%
+  select(-Corner, -Canopy_open)%>%
+  unique()
+Canopy_av<-na.omit(Canopy_av)%>%
+  filter(!Round==5)
+
+Air<-Air%>%
+  mutate(mean_temp=(Temp_Start+Temp_end)/2)%>%
+  mutate(mean_PM2.5=(PM2.5_Start+PM2.5_end)/2)
+Temp<-Air%>%
+  select(Round, Site, mean_temp, mean_PM2.5)%>%
+  filter(!Round==5)
+
+
+Veg <- Veg %>%
+  mutate(Cover_Type = case_match(Cover_Type,
+    "L-C"  ~ "L-B",
+    "R-C" ~ "R-B",
+    "LN" ~ "L-N",
+    "L-A" ~ "L-B",
+    "Ln"~ "L-N",
+    "RB"~ "R-B",
+     "V-n"~ "V-N",
+     "B-G"~ "BG",
+    
+    .default = Cover_Type # Keep everything else the same
+  ))
+
+Veg_cover<-Veg%>%
+  group_by(Site, Quadrat, Cover_Type,Transect, Round)%>%
+  summarise(Cover_prop=sum(as.numeric(Cover_Prop)))
+
+Veg_cover_mean<-Veg_cover%>%
+  group_by(Site, Cover_Type)%>%
+   summarise(Cover_prop=mean(as.numeric(Cover_prop)))
+
+Veg_cover_wide<-Veg_cover_mean%>%
+  pivot_wider(names_from=Cover_Type, values_from=Cover_prop)
+
+Veg_cover_wide<-Veg_cover_wide%>%
+  filter(!Site=="NA")%>%
+  select(-"NA")
+#if there is no data there that means that the cover is 0 percent
+Veg_cover_wide[is.na(Veg_cover_wide)]<- 0
+
+```
+
+```{r}
+Canopy_av$Round<-as.numeric(Canopy_av$Round)
+Temp$Round<-as.numeric(Temp$Round)
+Canopy_av$Site<-as.numeric(Canopy_av$Site)
+Temp$Site<-as.numeric(Temp$Site)
+canopy_temp<-left_join(Canopy_av, Temp, by= join_by(Round==Round, Site==Site))
+canopy_temp<-canopy_temp%>%
+  filter(mean_temp<100)
+lm<-lmer(mean_temp~Open_av+(1|Round), data=canopy_temp)
+
+summary(lm)
+lm_pm<-lmer(mean_PM2.5~Open_av+(1|Round), data=canopy_temp)
+summary(lm_pm)
+lm_pm<-lmer(mean_PM2.5~mean_temp+(1|Round), data=canopy_temp)
+summary(lm_pm)
+
+
+
+
+plot(canopy_temp$mean_temp~canopy_temp$Open_av)
+
+
+species_count<-BES_Data_Sheet_Species_List%>%
+  select(Site, Species_count, 'Site Type')%>%
+  na.omit()
+species_count<-rename(species_count, Site_type='Site Type')
+species_count<-species_count%>%
+  group_by(Site_type)%>%
+  mutate(mean_sp_count=mean(Species_count))
+lm_sp<-lm(Species_count~Site_type, data=species_count)
+
+summary(lm_sp)
+anova(lm_sp)
+em<-emmeans(lm_sp, ~Site_type)
+pairs(em)
+library(emmeans)
+library(ggplot2)
+ggplot(data=species_count, aes(x=Site_type, y=Species_count))+
+  geom_boxplot()
+
+site_av<-canopy_temp%>%
+  group_by(Site)%>%
+  summarise(Open_canopy=mean(Open_av),
+            Temp=mean(mean_temp), 
+            PM2.5=mean(mean_PM2.5))
+canopy_temp_sp<-left_join(site_av, species_count, by= join_by( Site==Site))
+
+canopy_temp_sp<-canopy_temp_sp%>%
+  select(-Species_count)
+data<-left_join(canopy_temp_sp, Veg_cover_wide, by= join_by( Site==Site))
+
+cordata<-data%>%
+  select(-Species_count, -Site, -Site_type)
+library(corrplot)
+sitecorrelation<-cor(cordata, use = "pairwise.complete.obs")
+p.mat <- cor.mtest(sitecorrelation)$p
+corrplot(sitecorrelation,type = "upper",  p.mat=p.mat, sig.level = 0.05,  na.label = "square", na.label.col = "grey")
+
+
+```
+
